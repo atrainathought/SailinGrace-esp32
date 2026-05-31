@@ -1,0 +1,28 @@
+# Secrets — boat WiFi credentials, never committed
+firmware/src/secrets.h
+**/secrets.local.*
+*.creds
+
+# PlatformIO
+firmware/.pio/
+firmware/.pioenvs/
+firmware/.piolibdeps/
+firmware/.vscode/
+firmware/.clang_complete
+firmware/.gcc-flags.json
+
+# Python (tools/)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Captured logs from a real deploy — these belong in a personal data dir, not the repo
+data/captures/
+*.ndjson
