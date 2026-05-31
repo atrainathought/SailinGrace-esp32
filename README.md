@@ -13,9 +13,11 @@ Pi-based relay for boats with N2K backbone access). This repo is the
 the boat WiFi puts out for the duration of the race.
 
 **Status:** planning / scaffold only. No working firmware yet — see
-[`PLAN.md`](PLAN.md) for the build plan and what needs to happen first
-(signal discovery on the boat to find out whether Lynx broadcasts NMEA
-0183 or SignalK, which determines the firmware path).
+[`PLAN.md`](PLAN.md) for the full build plan and
+[`docs/phase0.md`](docs/phase0.md) for the boat-day signal-discovery
+procedure that has to happen first (we need to know whether Lynx
+broadcasts NMEA 0183 or SignalK before writing any firmware — the
+two paths fork 5× in effort).
 
 ## Why this exists
 

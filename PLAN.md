@@ -154,6 +154,10 @@ yields traffic in 30 s. Optional, can ship without it.
 
 ### Phase 0 — Resolve the protocol unknown (BLOCKER, on Lynx)
 
+**See [`docs/phase0.md`](docs/phase0.md) for the step-by-step boat-day
+procedure** (join WiFi, scan, capture, verify GPS presence, lock in
+the firmware path).
+
 Before any ESP32 work, run `discover_signals.py` from `SailinGrace-pi`
 on the boat. This tells us:
 
@@ -162,6 +166,10 @@ on the boat. This tells us:
 - Which channel emits live data: `udp:2000` / `udp:10110` / `tcp:...` /
   `signalk:ws://...`
 - What sentences/paths are present, at what rates
+- **Whether GPS is on the WiFi feed** (RMC sentence or
+  `navigation.position` path) — open question; the SailinGrace data
+  model is GPS-ready, but we don't yet know if Lynx's MFD broadcasts
+  position over the WiFi network or holds it for itself
 - Output: `data/discovery/<ts>_summary.json` from `discover_signals.py
   capture`
 
