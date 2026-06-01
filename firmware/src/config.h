@@ -1,0 +1,35 @@
+// Non-secret runtime configuration for the SailinGrace-esp32 logger.
+// WiFi credentials live in secrets.h (gitignored). Everything here is safe
+// to commit. Phase 0 locked the data path to NMEA-0183 over TCP.
+#pragma once
+
+// ── Data source — Lynx B&G MFDs (Phase 0 discovery) ───────────────────
+// .16 carries the fullest instrument set; .15 (Zeus3S) serves the same
+// feed and is the fallback if .16 is unreachable.
+#define TCP_HOST           "192.168.0.16"
+#define TCP_HOST_FALLBACK  "192.168.0.15"
+#define TCP_PORT           10110
+
+// ── SD card (Adalogger FeatherWing, SPI) ──────────────────────────────
+// VERIFY against your board: the Adalogger FeatherWing SD chip-select is
+// pin 5 on most Feathers, but some ESP32 boards route it to 10. See
+// docs/hardware.md before first flash.
+#define SD_CS              5
+#define LOG_DIR            "/logs"
+#define SD_MIN_FREE_MB     100      // stop writing below this floor (never fill the card)
+
+// ── Timing ────────────────────────────────────────────────────────────
+#define FLUSH_INTERVAL_MS  2000UL   // fsync cadence — bounds data lost on a power cut
+#define GUARD_INTERVAL_MS  60000UL  // periodic WiFi / SD / date-rollover / free-space check
+#define TCP_BACKOFF_MIN_MS 1000UL   // reconnect backoff floor
+#define TCP_BACKOFF_MAX_MS 30000UL  // reconnect backoff ceiling
+#define WIFI_CONNECT_TIMEOUT_MS 20000UL
+
+// ── Buffers ───────────────────────────────────────────────────────────
+#define LINE_MAX           1024     // longest NMEA line + slack (fixed buffer — no String, no heap churn)
+#define REC_MAX            1400     // NDJSON record buffer
+
+// ── Status LED ────────────────────────────────────────────────────────
+#ifndef LED_BUILTIN
+#define LED_BUILTIN        13       // Adafruit ESP32-S3 Feather red LED
+#endif
