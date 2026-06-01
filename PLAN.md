@@ -63,18 +63,74 @@ but needs more breadboarding.
 | Part | Notes | Cost |
 |---|---|---|
 | Adafruit ESP32-S3 Feather | Native USB-C, JST 2-pin battery, 8 MB flash | $20 |
-| Adalogger FeatherWing | SPI SD slot + RTC (DS3231-equivalent PCF8523) | $9 |
-| 32 GB microSD (SanDisk industrial-rated preferred) | NDJSON capture for 6 days uses <1 GB; sized for headroom | $8 |
+| Adalogger FeatherWing | SPI SD slot + PCF8523 RTC — SD + a battery-backed clock in one board (see SD note below) | $9 |
+| **High-endurance** 32 GB microSD (SanDisk High Endurance / Industrial, or pSLC) | Continuous 24/7 writes for 6 days kill consumer cards; endurance cards are the reliability item, not the size — 6 days of NDJSON is <1 GB | $12 |
 | **OR** all-in-one alternative: LilyGo T-Display ESP32-S3 with onboard SD | If you want a status screen | $25 |
-| 10 000 mAh USB power bank | Covers 6 days at 0.2 W average with ~80% margin | $25 |
+| **20 000 mAh** USB power bank | Sized from the corrected budget below — 10 Ah is NOT enough for a 6-day continuous-WiFi logger | $35 |
 | Pelican 1015 Micro Case or equiv | Watertight, snorkels through a hatch | $20 |
 | Misc: silicone caulk, zip ties | | $5 |
-| **Total** | | **~$90** |
+| **Total** | | **~$110** |
 
-If standalone-from-house-bus matters: a single 18650 cell + holder
-(~$8) instead of the USB bank still gives 2–3 days; a 3-cell holder
-($15 + cells) goes to 6+ days. USB bank is friendlier for non-electrical
-people on the boat.
+### SD card hardware
+
+- **Interface:** the ESP32-S3 supports *both* SPI and native **SDMMC**
+  (SD/SDIO, 1- or 4-bit) via a dedicated controller. SDMMC 4-bit is faster
+  and lower energy-per-byte, but needs ~6 dedicated GPIOs and isn't on the
+  Adalogger. **Our throughput is ~5–10 KB/s** (NMEA text) — SPI has an order
+  of magnitude of headroom, so **use the Adalogger's SPI SD** for simplicity
+  and get the RTC in the same board. Reserve SDMMC for a high-rate logger we
+  don't have.
+- **Card:** must be **high-endurance / industrial** (SanDisk High Endurance,
+  Industrial, or pSLC). A consumer card under sustained append-logging will
+  wear-fail mid-race — endurance is the spec that matters here, not capacity.
+- **Filesystem:** **FAT32** (exFAT is finicky on ESP32). Pre-format with the
+  SD Association's formatter.
+- **Power/reliability:** an inserted card idles ~5–15 mA and peaks ~50–100 mA
+  during writes; with buffered/batched writes its *average* contribution is a
+  few mA. Note `SD.end()` does **not** drop the S3 into a low-power state, so
+  the card keeps drawing idle current — fine on a USB bank, relevant only if
+  you ever battery-optimize. Flush/close frequently and brownout-halt
+  cleanly so a power cut only truncates the last NDJSON line.
+
+If standalone-from-house-bus matters, see the power budget below for cell
+options. A USB bank is friendliest for non-electrical crew.
+
+## Power budget
+
+> **Correction:** the original scaffold assumed ~0.2 W average and claimed a
+> 10 Ah bank covered 6 days with margin. That's optimistic — it implies heavy
+> deep-sleep, which a **continuously-connected WiFi TCP logger cannot do** (it
+> has to keep the radio up to hold the socket and receive ~5–10 KB/s). All
+> figures below are datasheet/range estimates for ESP32-S3 — **bench-measure
+> before trusting them** (put a USB power meter inline for a 1 h run).
+
+ESP32 has a **single shared 2.4 GHz radio**; WiFi and BLE time-slice it, so
+running both raises average current and slightly cuts throughput (irrelevant
+at our data rate).
+
+| Mode | Realistic average @ 5 V (USB-bank input) | Notes |
+|---|---|---|
+| WiFi STA, idle/modem-sleep, no traffic | ~30–50 mA (0.15–0.25 W) | the "0.2 W" the scaffold assumed — but not our duty cycle |
+| **WiFi STA, continuous TCP RX (our logger)** | **~80–120 mA (0.4–0.6 W)** | radio active for frequent RX; bursts to 300 mA. This is the number that matters. |
+| + SD writes (buffered) | +~3–10 mA avg | card idle ~5–15 mA, write peaks ~50–100 mA, batched |
+| **+ BLE peripheral rebroadcast (coexistence)** | **+~20–40 mA (→ ~0.5–0.75 W total)** | BLE advertise + 1 connection notifying; coexistence overhead on the shared radio |
+
+**Runtime (≈85% of nominal mAh delivered at 5 V after conversion losses):**
+
+| Battery | WiFi-only logger (~100 mA) | WiFi + BLE (~135 mA) |
+|---|---|---|
+| 10 000 mAh | **~3.5–4 days** ❌ short of a 6-day race | ~2.5–3 days ❌ |
+| 20 000 mAh | ~7–8 days ✅ | ~5–5.5 days ⚠️ marginal |
+| 30 000 mAh (or 2×10 Ah hot-swap) | ~11 days ✅ | ~8 days ✅ |
+
+**Takeaways**
+- **WiFi-only: 20 000 mAh** is the floor for a 6-day race (the BOM is updated).
+- **With BLE on continuously: 30 000 mAh**, or duty-cycle BLE (advertise only
+  when the watch app is actually connected), or plan a mid-race hot-swap.
+- Standalone cells: a single 18650 (~3 Ah) is ~1 day only at these real draws;
+  a 3-cell pack ~3 days. The USB bank is the practical choice.
+- Biggest single lever if runtime gets tight: it's the **WiFi radio**, not SD
+  or BLE — a longer DTIM / modem-sleep tuning buys the most back.
 
 ## Software architecture
 
@@ -257,6 +313,50 @@ or another NDJSON suitable for the offline replay pipeline.
 `tools/inject_to_sailingrace.py` — takes a captured log file and POSTs
 the deltas to a running SailinGrace backend's `/observations` endpoint
 so the routing UI can replay the trip.
+
+## BLE rebroadcast to a Garmin Quatix — investigation (optional v2)
+
+**Ask:** rebroadcast the captured instruments over BLE so a Garmin quatix
+watch can show live boat data on the wrist.
+
+**Feasibility — yes, but it's a two-sided custom build, not plug-and-play.**
+
+- **Connect IQ BLE is *central-role only.*** A watch app (incl. a **Data
+  Field**) can scan, pair, and read a peripheral's GATT characteristics, but
+  **a CIQ app cannot act as a BLE peripheral / cannot be fed by a standard
+  "boat data" profile the watch reads natively.** (Verified against Garmin's
+  `Toybox.BluetoothLowEnergy` docs.)
+- **quatix 7 *is* a supported device** for that module (API 3.1.0+, Data
+  Field context) — so the watch side is possible.
+- Therefore the only viable shape:
+  - **ESP32 = BLE GATT *peripheral*** exposing a small custom service (e.g.
+    one characteristic carrying a compact wind/SOG/depth/heading/position
+    frame, notified at ~1 Hz), running *alongside* the WiFi TCP capture
+    (radio coexistence).
+  - **quatix = a custom Connect IQ Data Field** (Monkey C) that connects to
+    that peripheral and renders the fields.
+- **Not possible:** emulating a Garmin marine device. The quatix natively
+  streams boat data only **from Garmin chartplotters/autopilots over a
+  Garmin-proprietary link** — a generic ESP32 can't impersonate that.
+
+**Cost / caveats**
+- **Power:** +~20–40 mA average (coexistence) — see the power budget; pushes a
+  6-day race to ~30 Ah or a hot-swap. Mitigate by **advertising only when the
+  watch app actually wants data** (duty-cycle), not continuously.
+- **Throughput:** trivial (a few fields at 1 Hz) — coexistence won't starve
+  the logger.
+- **Connection limits:** the watch is already BLE-paired to the phone; CIQ BLE
+  supports few concurrent connections — test the watch+phone+ESP32 combo early.
+- **Effort:** two new deliverables (ESP32 GATT peripheral; CIQ data-field app)
+  + pairing UX. Roughly a weekend each, watch-side is the unknown.
+
+**Scope tension (decision needed).** This contradicts the repo's charter —
+README/Non-goals say *passive logger, **not a relay**, no live display*. A live
+BLE feed is a real-time relay to a wearable. Recommendation: **keep v1 a pure
+SD logger** (the race-critical deliverable) and treat BLE rebroadcast as a
+**separate v2 experiment on its own firmware build/branch**, so it never bloats
+or risks the logger that has to survive 6 days untouched. Confirm before this
+goes on the v1 roadmap.
 
 ## Open questions / decisions needed
 
