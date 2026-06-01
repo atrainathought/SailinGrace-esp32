@@ -66,7 +66,7 @@ but needs more breadboarding.
 | Adalogger FeatherWing | SPI SD slot + PCF8523 RTC — SD + a battery-backed clock in one board (see SD note below) | $9 |
 | **High-endurance** 32 GB microSD (SanDisk High Endurance / Industrial, or pSLC) | Continuous 24/7 writes for 6 days kill consumer cards; endurance cards are the reliability item, not the size — 6 days of NDJSON is <1 GB | $12 |
 | **OR** all-in-one alternative: LilyGo T-Display ESP32-S3 with onboard SD | If you want a status screen | $25 |
-| **20 000 mAh** USB power bank | Sized from the corrected budget below — 10 Ah is NOT enough for a 6-day continuous-WiFi logger | $35 |
+| **20 000 mAh** power — **LiPo on the JST (preferred)** or an **always-on USB bank** | Sized from the budget below; 10 Ah is NOT enough for 6 days. A plain USB bank may auto-shut-off at our low draw — see Power budget | $35 |
 | Pelican 1015 Micro Case or equiv | Watertight, snorkels through a hatch | $20 |
 | Misc: silicone caulk, zip ties | | $5 |
 | **Total** | | **~$110** |
@@ -95,42 +95,62 @@ but needs more breadboarding.
 If standalone-from-house-bus matters, see the power budget below for cell
 options. A USB bank is friendliest for non-electrical crew.
 
-## Power budget
+## Power budget (logging-only)
 
-> **Correction:** the original scaffold assumed ~0.2 W average and claimed a
-> 10 Ah bank covered 6 days with margin. That's optimistic — it implies heavy
-> deep-sleep, which a **continuously-connected WiFi TCP logger cannot do** (it
-> has to keep the radio up to hold the socket and receive ~5–10 KB/s). All
-> figures below are datasheet/range estimates for ESP32-S3 — **bench-measure
-> before trusting them** (put a USB power meter inline for a 1 h run).
+> All figures are datasheet/range estimates for ESP32-S3 — **bench-measure
+> before trusting them**: USB power meter inline, 1 h run at the real data
+> rate. The scaffold's "~0.2 W, 10 Ah = 6 days" was optimistic; a
+> continuously-connected WiFi TCP logger can't deep-sleep — it holds the
+> socket and receives ~5–10 KB/s, so the radio stays up.
 
-ESP32 has a **single shared 2.4 GHz radio**; WiFi and BLE time-slice it, so
-running both raises average current and slightly cuts throughput (irrelevant
-at our data rate).
+### Average draw
 
-| Mode | Realistic average @ 5 V (USB-bank input) | Notes |
+| State | ESP32-S3 average @ 3.3 V | Notes |
 |---|---|---|
-| WiFi STA, idle/modem-sleep, no traffic | ~30–50 mA (0.15–0.25 W) | the "0.2 W" the scaffold assumed — but not our duty cycle |
-| **WiFi STA, continuous TCP RX (our logger)** | **~80–120 mA (0.4–0.6 W)** | radio active for frequent RX; bursts to 300 mA. This is the number that matters. |
-| + SD writes (buffered) | +~3–10 mA avg | card idle ~5–15 mA, write peaks ~50–100 mA, batched |
-| **+ BLE peripheral rebroadcast (coexistence)** | **+~20–40 mA (→ ~0.5–0.75 W total)** | BLE advertise + 1 connection notifying; coexistence overhead on the shared radio |
+| WiFi associated, modem-sleep, no traffic | ~20–50 mA | beacon RX only |
+| **WiFi STA + continuous TCP RX (the logger)** | **~60–100 mA** | radio wakes per packet; bursts ~300 mA on RX |
+| + SD writes (buffered/batched) | +~3–10 mA avg | card idles ~5–15 mA; write peaks 50–100 mA, brief |
 
-**Runtime (≈85% of nominal mAh delivered at 5 V after conversion losses):**
+So the logger is **~0.25–0.4 W at the chip**. The biggest runtime lever is the
+**WiFi radio** (tune DTIM / max modem-sleep); SD is noise by comparison. With
+BLE dropped, there's no coexistence overhead — the radio does one job.
 
-| Battery | WiFi-only logger (~100 mA) | WiFi + BLE (~135 mA) |
+### Two gotchas that kill always-on USB-bank rigs
+
+1. **USB banks auto-shut-off at low current.** Most cut output below
+   ~50–100 mA (they assume charging finished) — and our ~60–90 mA sits right
+   in that zone, so a bank can **silently power off mid-race.** This is a
+   bigger deployment risk than capacity. → use a bank with an explicit
+   **always-on / trickle / low-current mode** and *verify it on the bench for
+   hours*, or avoid the problem entirely (below).
+2. **Double conversion wastes ~20–25%:** cells 3.7 V → boost 5 V (~88%) →
+   Feather regulator → 3.3 V (~88%). You pay both stages.
+
+### Two power architectures
+
+| Option | Pros | Cons |
 |---|---|---|
-| 10 000 mAh | **~3.5–4 days** ❌ short of a 6-day race | ~2.5–3 days ❌ |
-| 20 000 mAh | ~7–8 days ✅ | ~5–5.5 days ⚠️ marginal |
-| 30 000 mAh (or 2×10 Ah hot-swap) | ~11 days ✅ | ~8 days ✅ |
+| USB power bank → USB-C | crew-friendly, hot-swappable, no LiPo handling | auto-shutoff risk; double-conversion loss; quiescent drain over 6 days |
+| **LiPo straight to the Feather JST** ⭐ | single conversion (3.7 → 3.3 V), **no auto-off failure mode**, ~20% more runtime/Wh, onboard charger + fuel gauge | LiPo handling/stowage; key the connector so it can't be reversed |
 
-**Takeaways**
-- **WiFi-only: 20 000 mAh** is the floor for a 6-day race (the BOM is updated).
-- **With BLE on continuously: 30 000 mAh**, or duty-cycle BLE (advertise only
-  when the watch app is actually connected), or plan a mid-race hot-swap.
-- Standalone cells: a single 18650 (~3 Ah) is ~1 day only at these real draws;
-  a 3-cell pack ~3 days. The USB bank is the practical choice.
-- Biggest single lever if runtime gets tight: it's the **WiFi radio**, not SD
-  or BLE — a longer DTIM / modem-sleep tuning buys the most back.
+For a logger that must **survive 6 days untouched, a big LiPo on the JST is the
+more robust choice** — it removes the single most likely "why did it die?"
+cause (the bank switching itself off). Keep a *vetted* always-on USB bank as
+the crew-friendly fallback.
+
+### Sizing for a 6-day (144 h) race (assume ~80 mA @ 3.3 V — measure to confirm)
+
+| Source | Est. runtime | Verdict |
+|---|---|---|
+| 10 000 mAh USB bank | ~4 days | ❌ short |
+| 20 000 mAh USB bank (always-on) | ~8 days | ✅ margin |
+| 10 000 mAh LiPo on JST | ~6 days | ⚠️ ~no margin |
+| 20 000 mAh LiPo on JST | ~11 days | ✅ comfortable |
+
+**Recommendation:** target **20 000 mAh** — preferably a **LiPo on the JST**
+(most robust), or an **always-on USB bank** (simplest). Either way: measure
+real draw first, then keep **≥30 % headroom** for cold (Li-ion loses capacity
+offshore) and cell aging.
 
 ## Software architecture
 
@@ -314,10 +334,15 @@ or another NDJSON suitable for the offline replay pipeline.
 the deltas to a running SailinGrace backend's `/observations` endpoint
 so the routing UI can replay the trip.
 
-## BLE rebroadcast to a Garmin Quatix — investigation (optional v2)
+## BLE rebroadcast to a Garmin Quatix — PARKED (not in scope)
 
-**Ask:** rebroadcast the captured instruments over BLE so a Garmin quatix
-watch can show live boat data on the wrist.
+> **DECISION (2026-06-01): not pursuing. v1 is logging-only.** A live BLE feed
+> is a real-time relay, which is outside this repo's charter (passive logger).
+> The investigation below is kept for if it's ever revisited — but it is **not
+> on the roadmap** and the power budget above is logging-only.
+
+**Ask (parked):** rebroadcast the captured instruments over BLE so a Garmin
+quatix watch can show live boat data on the wrist.
 
 **Feasibility — yes, but it's a two-sided custom build, not plug-and-play.**
 
