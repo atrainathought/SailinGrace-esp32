@@ -29,9 +29,30 @@
 #include <SD.h>
 #include <Wire.h>
 #include <RTClib.h>
+#include "esp_task_wdt.h"
 
 #include "config.h"
 #include "secrets.h"
+
+// Task watchdog: reset the chip if loop() stops feeding it for WDT_TIMEOUT_S
+// (a wedged WiFi/TCP stack self-recovers via reboot → auto-resume). The IDF
+// API changed between core 2.x (IDF 4) and 3.x (IDF 5); guard both.
+static void wdtBegin() {
+#if ESP_IDF_VERSION_MAJOR >= 5
+  esp_task_wdt_config_t cfg = {
+    .timeout_ms = WDT_TIMEOUT_S * 1000U,
+    .idle_core_mask = 0,        // don't watch the idle tasks, just our loop
+    .trigger_panic = true,      // panic-reset on timeout
+  };
+  if (esp_task_wdt_init(&cfg) == ESP_ERR_INVALID_STATE) {
+    esp_task_wdt_reconfigure(&cfg);   // core already init'd it — just retime
+  }
+#else
+  esp_task_wdt_init(WDT_TIMEOUT_S, true);
+#endif
+  esp_task_wdt_add(NULL);             // subscribe the loop task
+}
+static inline void wdtFeed() { esp_task_wdt_reset(); }
 
 // ── State ─────────────────────────────────────────────────────────────
 RTC_PCF8523 rtc;
@@ -155,12 +176,16 @@ static bool wifiUp() { return WiFi.status() == WL_CONNECTED; }
 static void connectWifi() {
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(true);                       // modem-sleep — the main power lever (see PLAN power budget)
+  WiFi.persistent(false);                    // don't wear NVS rewriting creds each connect
+  WiFi.setAutoReconnect(true);               // background reconnect on drop — recovers in seconds,
+                                             // well before the 60 s guard backstop
 
   Serial.printf("WiFi: joining %s\n", WIFI_SSID);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   unsigned long start = millis();
   while (!wifiUp() && millis() - start < WIFI_CONNECT_TIMEOUT_MS) {
+    wdtFeed();                               // this loop can block ~20 s — keep the WDT fed
     delay(250);
   }
 
@@ -169,7 +194,7 @@ static void connectWifi() {
     Serial.printf("WiFi: primary failed, trying %s\n", WIFI_SSID_FALLBACK);
     WiFi.begin(WIFI_SSID_FALLBACK, WIFI_PASSWORD_FALLBACK);
     start = millis();
-    while (!wifiUp() && millis() - start < WIFI_CONNECT_TIMEOUT_MS) delay(250);
+    while (!wifiUp() && millis() - start < WIFI_CONNECT_TIMEOUT_MS) { wdtFeed(); delay(250); }
   }
 
   if (wifiUp()) Serial.printf("WiFi: connected, IP %s\n", WiFi.localIP().toString().c_str());
@@ -240,6 +265,8 @@ void setup() {
   Serial.println("\nSailinGrace-esp32 logger booting");
   pinMode(LED_BUILTIN, OUTPUT);
 
+  wdtBegin();                                  // before the blocking SD/WiFi bring-up so they can feed it
+
   Wire.begin();
   if (rtc.begin()) {
     // initialized() is the documented PCF8523 "clock is running / has been
@@ -265,6 +292,8 @@ void setup() {
 }
 
 void loop() {
+  wdtFeed();                                   // alive — defer the watchdog reset
+
   if (wifiUp()) {
     ensureFeed();
     if (feed.connected()) pumpFeed();

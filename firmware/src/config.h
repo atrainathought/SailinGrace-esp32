@@ -25,6 +25,12 @@
 #define TCP_BACKOFF_MAX_MS 30000UL  // reconnect backoff ceiling
 #define WIFI_CONNECT_TIMEOUT_MS 20000UL
 
+// ── Watchdog ──────────────────────────────────────────────────────────
+// Reset the chip if loop() hangs this long (e.g. a wedged WiFi/TCP stack).
+// Must comfortably exceed the worst-case blocking call — connectWifi() can
+// block ~40 s (primary + fallback associate), so keep this well above that.
+#define WDT_TIMEOUT_S      90
+
 // ── Buffers ───────────────────────────────────────────────────────────
 #define LINE_MAX           1024     // longest NMEA line + slack (fixed buffer — no String, no heap churn)
 #define REC_MAX            1400     // NDJSON record buffer
