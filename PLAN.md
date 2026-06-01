@@ -1,6 +1,14 @@
 # SailinGrace-esp32 — Build Plan
 
-Last updated: 2026-05-31
+Last updated: 2026-06-01
+
+> **Phase 0 RESOLVED (2026-05-31, dockside at BYC).** Lynx broadcasts
+> **NMEA-0183 over TCP, port `10110`**, from B&G MFDs at `192.168.0.16`
+> (use this — fullest set) and `.15`, on WiFi **`lynx-instruments`** (WPA2,
+> `192.168.0.0/24`). GPS **is** in the feed. The firmware path is locked to
+> **TCP NMEA 0183 (Phase 3)** — UDP (Phase 2) and SignalK WS (Phase 4) are
+> not needed. Full evidence: [`data/discovery/`](data/discovery/)
+> (`boat_data_connection.md` + raw `.log` captures).
 
 ## Goal
 
@@ -20,22 +28,29 @@ through the SailinGrace pipeline ashore.
 If any of those become requirements, the answer is "use SailinGrace-pi
 on a Pi 4 or Pi Zero 2 W instead."
 
-## What we know about Lynx (from the 1hz branch + Pi discovery work)
+## What we know about Lynx (CONFIRMED — Phase 0 discovery, 2026-05-31)
 
-| Fact | Source |
+All from the dockside capture in [`data/discovery/`](data/discovery/);
+see `boat_data_connection.md` for the full field notes.
+
+| Fact | Detail |
 |---|---|
-| Instrument data is on a **password-protected boat WiFi network** ("Lynx MFD" was the working name in `join_wifi.sh` examples) | `SailinGrace-pi/docs/install_rpi.md` §"Joining a password-protected boat WiFi" |
-| N2K backbone access is **unconfirmed** — may or may not be tappable physically | `project-pi-relay-only` memory note |
-| Expected wire formats over WiFi (one of): NMEA 0183 UDP broadcast (B&G GoFree / Garmin / Raymarine MFDs), NMEA 0183 TCP server (Expedition's "NMEA Output"), or SignalK over WebSocket (less common on production MFDs) | `SailinGrace/backend/services/sensors/nmea0183_client.py` URL docs |
-| Common UDP ports to probe: **2000, 10110, 50000**. TCP: localhost + gateway, also subnet sweep | `SailinGrace/scripts/discover_signals.py` |
-| Expected NMEA 0183 sentences: **RMC** (GPS+SOG+COG), **MWV** (AWS+AWA), **MWD** (TWS+TWD), **VHW** (BSP+HDG), **HDG** (heading+variation) | `SailinGrace/backend/services/sensors/nmea0183.py` |
-| Expected SignalK paths (if WS): `navigation.position`, `navigation.speedOverGround`, `environment.wind.angle{Apparent,True}`, `environment.wind.speed{Apparent,True}`, `navigation.headingMagnetic`, etc. | `SailinGrace/backend/services/sensors/signalk.py` |
-| Single-radio constraint: the ESP32's one WiFi radio is *client* (joining boat network). No AP, no second SSID. | ESP32 hardware |
+| **WiFi network** | `lynx-instruments`, WPA2-Personal, subnet `192.168.0.0/24`, gateway `.1` (OPNsense). PSK held by crew — never in repo. |
+| **Data source** | **NMEA-0183 over TCP, port `10110`**, served by B&G MFDs at `192.168.0.16` (fullest set — wind, BSP, depth, water temp, heel, GPS, AIS) and `192.168.0.15` (Zeus3S). **Target `.16`.** |
+| **Protocol** | TCP NMEA-0183. **Not** UDP broadcast, **not** SignalK WS. (UDP ports 2000/10110/50000 were probed — nothing. No SignalK server found.) |
+| **GPS present?** | **Yes** — `GNGGA`/`GPRMC`/`GPGLL`/`GPVTG` @ ~1 Hz, real fix (dockside 42.30 N, 70.50 W). The post-trip trackline comes straight from the feed; no separate GPS source needed. |
+| **Sentence inventory** (~120 s capture, approx rates) | `IIHDG` heading+var ~10 Hz · `WIMWV` app/true wind 2 Hz · `WIMWD` wind dir 1 Hz · `SDVHW` boat speed 1 Hz · `SDDBT`/`SDDPT` depth 1 Hz · `SDMTW` water temp 1 Hz · `IIXDR` heel/trim/baro/rudder 1 Hz · `GN/GP` GPS 1 Hz · `!AIVDM` AIS ~3.6 Hz · `GPAPB`/`GPBOD`/`GPRMB`/`GPXTE` waypoint nav 1 Hz. All already covered by `SailinGrace/backend/services/sensors/nmea0183.py`. |
+| **Other SSIDs** (surveyed, unused) | `lynx-navigator` (nothing on 80/10110), `Zeus3S 71a6` (MFD's own AP, separate key, = `.15`), `VHF_16_024` (gateway admin only). `.16` was the single complete source. |
+| **Single-radio constraint** | The ESP32's one radio is a *client* joining `lynx-instruments`. No AP, no second SSID. |
 
-**The critical unknown**: which protocol Lynx actually broadcasts. This
-determines whether the firmware is 50 lines (NMEA 0183 UDP) or 300
-lines (SignalK WS). The signal-discovery step on the boat (Phase 0
-below) resolves this before any ESP32 firmware is written.
+### Why the ESP32 path is far simpler than the laptop's
+
+The connection notes document an elaborate Windows→WSL push-relay because
+SailinGrace runs in **Docker-inside-WSL2**, whose NAT isolates the container
+from the boat LAN. **None of that applies here.** The ESP32 is a native WiFi
+client on `192.168.0.0/24`, so it connects **directly** to
+`192.168.0.16:10110` — no relay, no bridge, no mirrored-networking. The
+firmware is just: join WiFi → open TCP socket → read lines → write SD.
 
 ## Hardware
 
@@ -139,42 +154,31 @@ Compile-time `secrets.h` (gitignored) holds the WiFi credentials.
 Runtime-tunable knobs live in `config.h`:
 
 ```cpp
-#define CAPTURE_MODE   MODE_UDP_NMEA  // or MODE_TCP_NMEA, MODE_SIGNALK_WS, MODE_AUTO
-#define UDP_PORTS      {2000, 10110, 50000}  // ports to listen on for UDP_NMEA
-#define TCP_HOST       "192.168.4.1"          // when MODE_TCP_NMEA
+// Phase 0 locked the path: TCP NMEA 0183 to the B&G MFD. The UDP and
+// SignalK modes are kept in the architecture for reuse on other boats,
+// but Lynx ships single-mode TCP.
+#define CAPTURE_MODE   MODE_TCP_NMEA
+#define TCP_HOST       "192.168.0.16"   // B&G MFD, fullest set (.15 is the fallback)
 #define TCP_PORT       10110
-#define SIGNALK_URL    "ws://192.168.4.1:3000/signalk/v1/stream?subscribe=self"
 #define SD_MIN_FREE_MB 100
+// WiFi SSID is "lynx-instruments"; PSK lives in secrets.h (gitignored).
 ```
 
-`MODE_AUTO` would try in order: UDP → TCP → WS, picking the first that
-yields traffic in 30 s. Optional, can ship without it.
+Single mode, no `MODE_AUTO` — we know the answer for Lynx. (Keep `.15`
+as a fallback host if `.16` is ever unreachable; both serve the feed.)
 
 ## Phased build
 
-### Phase 0 — Resolve the protocol unknown (BLOCKER, on Lynx)
+### Phase 0 — Resolve the protocol unknown — ✅ DONE (2026-05-31)
 
-**See [`docs/phase0.md`](docs/phase0.md) for the step-by-step boat-day
-procedure** (join WiFi, scan, capture, verify GPS presence, lock in
-the firmware path).
+**DECISION: Lynx broadcasts NMEA-0183 over TCP at `192.168.0.16:10110`,
+GPS included. Build the Phase 3 (TCP) firmware.** Phases 2 (UDP) and 4
+(SignalK WS) are not needed for Lynx.
 
-Before any ESP32 work, run `discover_signals.py` from `SailinGrace-pi`
-on the boat. This tells us:
-
-- WiFi SSID + password that actually works (already known if Pi has
-  joined successfully)
-- Which channel emits live data: `udp:2000` / `udp:10110` / `tcp:...` /
-  `signalk:ws://...`
-- What sentences/paths are present, at what rates
-- **Whether GPS is on the WiFi feed** (RMC sentence or
-  `navigation.position` path) — open question; the SailinGrace data
-  model is GPS-ready, but we don't yet know if Lynx's MFD broadcasts
-  position over the WiFi network or holds it for itself
-- Output: `data/discovery/<ts>_summary.json` from `discover_signals.py
-  capture`
-
-**No ESP32 firmware work until this is done.** The protocol decision
-forks the build path 5×.
+Evidence in [`data/discovery/`](data/discovery/): `boat_data_connection.md`
+(field notes) + raw `lynx_nmea_192.168.0.{15,16}_*.log` captures. Procedure
+that produced it is in [`docs/phase0.md`](docs/phase0.md). The build path is
+now unblocked.
 
 ### Phase 1 — Bench bring-up (1 evening)
 
@@ -189,25 +193,32 @@ one heartbeat file every 10 s. No capture logic yet.
 **Done when:** the chip survives an overnight bench run with the
 heartbeat file growing as expected.
 
-### Phase 2 — NMEA 0183 UDP capture (1 weekend — if Phase 0 found UDP)
+### Phase 2 — NMEA 0183 UDP capture — ❌ NOT NEEDED (Lynx is TCP)
 
-- Implement `WiFiUDP.parsePacket()` loop
-- Sentence checksum validation (`$` to `*` XOR per NMEA 0183 spec)
-- Daily NDJSON rotation by UTC date
-- Free-space guard (stop writing if <100 MB free)
-- Periodic WiFi reconnect
+Kept only as a reference if this rig is reused on a boat that broadcasts
+UDP. Skip for Lynx.
 
-**Test:** point the ESP32 at the boat WiFi at the dock, capture for
-2 hours, pull SD, verify NDJSON parses cleanly with `tools/parse_log.py`
-and the sentence rates match what `discover_signals.py capture` saw.
+### Phase 3 — NMEA 0183 TCP capture (1 day) — ⭐ THE LYNX PATH
 
-### Phase 3 — NMEA 0183 TCP fallback (1 day — if Phase 0 found TCP)
+This is the firmware to build.
 
-Same as Phase 2 but `WiFiClient` instead of UDP. Slightly more code
-because TCP needs explicit connect/disconnect and line buffering across
-packet boundaries.
+- `WiFiClient` connects to `192.168.0.16:10110` (`.15` fallback).
+- Read one line at a time; buffer across packet boundaries (TCP doesn't
+  preserve line framing — accumulate until `\n`).
+- Optional sentence checksum validation (`$`/`!` to `*` XOR); on a capture
+  rig, prefer logging verbatim even if a checksum looks off, and validate
+  ashore.
+- Daily NDJSON rotation by UTC date; free-space guard (<100 MB → prune).
+- Reconnect with backoff (1 s → 30 s) on close — the MFD or WiFi will drop
+  occasionally over a 6-day race.
 
-### Phase 4 — SignalK WebSocket capture (1 weekend — if Phase 0 found SK)
+**Test:** replay a real capture as a TCP server and point the ESP32 at it —
+`socat TCP-LISTEN:10110,reuseaddr,fork SYSTEM:'cat data/discovery/lynx_nmea_192.168.0.16_2026-05-31.log'`
+(or a tiny Python server). Then dockside on Lynx for 2 h; pull SD; confirm
+`tools/parse_log.py` parses it and the sentence mix matches the discovery
+capture.
+
+### Phase 4 — SignalK WebSocket capture — ❌ NOT NEEDED (Lynx is TCP NMEA)
 
 This is the most complex path:
 
@@ -255,12 +266,15 @@ so the routing UI can replay the trip.
    formatted FAT32 by SD card associations' tool works fine in practice).
    exFAT is finicky on ESP32. Default: FAT32, format with SD Card
    Formatter ahead of time.
-3. **Time source**: ESP32 has no RTC. Options:
-   - NTP at boot (needs internet — boat WiFi probably LAN-only → fails)
-   - Add Adalogger's PCF8523 RTC ($9 → already in BOM)
-   - Trust GPS time inside NMEA RMC / SignalK `navigation.datetime`
-   - **Default: RTC chip on the Adalogger, with GPS-time fallback in
-     post-processing**
+3. **Time source**: ESP32 has no RTC.
+   - NTP at boot — **confirmed unavailable**: `lynx-instruments` is a LAN
+     (OPNsense gateway, no internet), so NTP fails.
+   - **GPS time is confirmed present** in the feed (`GPRMC` date+time,
+     `GNGGA` time @ 1 Hz) — a reliable wall-clock source once the MFD has a
+     fix. The raw `.log` captures already carry a host timestamp per line.
+   - **Default: Adalogger PCF8523 RTC ($9, already in BOM) for immediate
+     boot-time stamping, with GPS time (now known to be in-stream) as the
+     authoritative second source in post-processing.**
 4. **License**: MIT (matches `SailinGrace-pi`). Confirm with user.
 5. **Push to GitHub now or wait for working firmware?** Default: push
    the planning scaffold now so the repo exists and `PLAN.md` is
@@ -270,8 +284,9 @@ so the routing UI can replay the trip.
 
 | Risk | Mitigation |
 |---|---|
-| Lynx WiFi turns out to be inaccessible (captive portal, MAC allowlist) | Phase 0 catches this before any ESP32 work. Fallback: PiCAN-M on N2K backbone |
-| SignalK WS path is the only option, ArduinoJson can't fit deltas | Use filtered deserialization; if still tight, drop to raw frame logging (capture WS frames verbatim, parse ashore) |
+| ~~Lynx WiFi inaccessible (captive portal, MAC allowlist)~~ | **Resolved** — `lynx-instruments` joined cleanly with the boat PSK, no captive portal, no allowlist. (The MFD's own `Zeus3S 71a6` AP has a separate key, but we don't need it.) |
+| ~~SignalK WS the only option, ArduinoJson can't fit deltas~~ | **Moot** — Lynx is NMEA-0183 TCP, no JSON parsing on-chip. |
+| MFD/WiFi drops over a 6-day race | TCP reconnect with backoff (Phase 3); capture resumes within seconds. The relay self-heals on reconnect (confirmed in the connection notes). |
 | SD card corruption from sudden power loss | Brownout detector + frequent close-reopen of the log file + the existing post-mortem `parse_log.py` already handles truncated last-line NDJSON |
 | Battery dies mid-race | 10 Ah USB bank has 80% margin at 0.2 W avg; brownout-halt is graceful; user can hot-swap by plugging a fresh bank |
 | ESP32 hangs (WiFi stack bug, library bug) | Task watchdog reset; capture resumes within ~10 s. Worst case: lose one minute of data |
@@ -282,9 +297,12 @@ so the routing UI can replay the trip.
 1. **Unit**: each module (`sd_writer.cpp`, `nmea_parser.cpp`) has
    Arduino-native test harnesses runnable from PlatformIO `test`
    command. Don't ship without these.
-2. **Soak**: 48-hour bench run against `nmea0183_simulator.py` from
-   the SailinGrace repo broadcasting UDP on a known port. Pull SD,
-   verify nothing is missing, rotation happened correctly.
+2. **Soak**: 48-hour bench run. Best fidelity is replaying the **real Lynx
+   capture** over TCP (`socat TCP-LISTEN:10110,reuseaddr,fork
+   SYSTEM:'cat data/discovery/lynx_nmea_192.168.0.16_2026-05-31.log'`), since
+   it has the actual sentence mix/rates/AIS the firmware will see;
+   `nmea0183_simulator.py --transport tcp` is the synthetic alternative.
+   Pull SD, verify nothing is missing and rotation happened correctly.
 3. **Boat shakedown**: deploy on Lynx for one day-sail or a weekend
    buoy race. Compare the ESP32's NDJSON against what the laptop's
    SailinGrace captures over the same network. Discrepancies → bugs.

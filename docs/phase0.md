@@ -1,5 +1,12 @@
 # Phase 0 — Signal discovery on Lynx
 
+> **✅ RESOLVED 2026-05-31 (dockside, BYC).**
+> **DECISION: Lynx broadcasts NMEA-0183 over TCP at `192.168.0.16:10110`**
+> (WiFi `lynx-instruments`, WPA2; `.15` is a fallback). GPS is in the feed.
+> **Build the Phase 3 (TCP) firmware.** Evidence:
+> [`../data/discovery/`](../data/discovery/). The procedure below is kept as
+> the repeatable method (and for re-running on another boat).
+
 **Goal:** find out what protocol Lynx's WiFi instrument network actually
 broadcasts, so we can lock in the ESP32 firmware path (UDP NMEA, TCP
 NMEA, or SignalK over WebSocket — see [`../PLAN.md`](../PLAN.md)).
