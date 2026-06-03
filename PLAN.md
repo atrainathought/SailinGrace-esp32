@@ -66,7 +66,7 @@ but needs more breadboarding.
 | Adalogger FeatherWing | SPI SD slot + PCF8523 RTC — SD + a battery-backed clock in one board (see SD note below) | $9 |
 | **High-endurance** 32 GB microSD (SanDisk High Endurance / Industrial, or pSLC) | Continuous 24/7 writes for 6 days kill consumer cards; endurance cards are the reliability item, not the size — 6 days of NDJSON is <1 GB | $12 |
 | **OR** all-in-one alternative: LilyGo T-Display ESP32-S3 with onboard SD | If you want a status screen | $25 |
-| **20 000 mAh** power — **LiPo on the JST (preferred)** or an **always-on USB bank** | Sized from the budget below; 10 Ah is NOT enough for 6 days. A plain USB bank may auto-shut-off at our low draw — see Power budget | $35 |
+| **20 000 mAh always-on USB power bank** | Chosen power source (cheaper/safer/sourceable). 10 Ah is NOT enough for 6 days; must have an **always-on/low-current mode** so it doesn't auto-off at our ~80 mA draw — bench-verify the unit. See Power budget | $35 |
 | Pelican 1015 Micro Case or equiv | Watertight, snorkels through a hatch | $20 |
 | Misc: silicone caulk, zip ties | | $5 |
 | **Total** | | **~$110** |
@@ -97,6 +97,13 @@ options. A USB bank is friendliest for non-electrical crew.
 
 ## Power budget (logging-only)
 
+> **DECISION (2026-06-03): USB power bank.** Cheaper, safer, and easier to
+> source than a loose LiPo. Consequence: **battery telemetry + graceful
+> brownout-halt are off the table** (the chip sees only the regulated 5 V
+> rail, never the bank's cells) — power-loss protection is therefore the 2 s
+> flush + line-oriented NDJSON + the 90 s watchdog auto-resume. **The one
+> hard requirement this creates: an always-on bank (see gotcha #1), verified.**
+
 > All figures are datasheet/range estimates for ESP32-S3 — **bench-measure
 > before trusting them**: USB power meter inline, 1 h run at the real data
 > rate. The scaffold's "~0.2 W, 10 Ah = 6 days" was optimistic; a
@@ -126,17 +133,22 @@ BLE dropped, there's no coexistence overhead — the radio does one job.
 2. **Double conversion wastes ~20–25%:** cells 3.7 V → boost 5 V (~88%) →
    Feather regulator → 3.3 V (~88%). You pay both stages.
 
-### Two power architectures
+### Power architecture — USB bank (chosen)
 
 | Option | Pros | Cons |
 |---|---|---|
-| USB power bank → USB-C | crew-friendly, hot-swappable, no LiPo handling | auto-shutoff risk; double-conversion loss; quiescent drain over 6 days |
-| **LiPo straight to the Feather JST** ⭐ | single conversion (3.7 → 3.3 V), **no auto-off failure mode**, ~20% more runtime/Wh, onboard charger + fuel gauge | LiPo handling/stowage; key the connector so it can't be reversed |
+| **USB power bank → USB-C** ✅ chosen | cheaper, safer, easy to source; crew-friendly; hot-swappable; no LiPo handling | **auto-shutoff risk** (mitigate below); double-conversion loss; quiescent drain; no battery telemetry possible |
+| LiPo straight to the JST (not chosen) | single conversion, no auto-off, ~20% more runtime, readable cell voltage | LiPo handling/sourcing/stowage — the reasons it lost |
 
-For a logger that must **survive 6 days untouched, a big LiPo on the JST is the
-more robust choice** — it removes the single most likely "why did it die?"
-cause (the bank switching itself off). Keep a *vetted* always-on USB bank as
-the crew-friendly fallback.
+**Living with the bank's one real risk (auto-shutoff):**
+- Buy a bank with an explicit **always-on / trickle / low-current mode** (e.g.
+  Voltaic, Nitecore, some Anker "trickle"/low-current models). This is the
+  spec that matters more than mAh.
+- **Bench-verify before the race:** run the full rig off the candidate bank for
+  **≥12 h** and confirm it doesn't cut out. Do this for the *actual* unit.
+- Firmware can't reliably fix a bank that cuts at low current. If a chosen bank
+  insists on cutting out, last resorts are a different bank, or a periodic
+  keep-alive current pulse in firmware (not built — only if forced).
 
 ### Sizing for a 6-day (144 h) race (assume ~80 mA @ 3.3 V — measure to confirm)
 
@@ -147,10 +159,11 @@ the crew-friendly fallback.
 | 10 000 mAh LiPo on JST | ~6 days | ⚠️ ~no margin |
 | 20 000 mAh LiPo on JST | ~11 days | ✅ comfortable |
 
-**Recommendation:** target **20 000 mAh** — preferably a **LiPo on the JST**
-(most robust), or an **always-on USB bank** (simplest). Either way: measure
-real draw first, then keep **≥30 % headroom** for cold (Li-ion loses capacity
-offshore) and cell aging.
+**Recommendation:** a **20 000 mAh always-on USB bank** (~8 days est. at ~80 mA
+— ~30% headroom over the 6-day race for cold, which fades Li-ion, and aging).
+10 Ah is too short. Measure the real draw first, and bench-verify the specific
+bank doesn't auto-off (above). A second charged bank aboard for a hot-swap is
+cheap insurance.
 
 ## Software architecture
 
