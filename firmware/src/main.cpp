@@ -18,7 +18,10 @@
 //  - Free-space floor: stops writing below SD_MIN_FREE_MB rather than fill the
 //    card. (Prune-oldest is a Phase-5 hardening item; 6 days of NDJSON is
 //    <1 GB on a 32 GB card, so the floor is a backstop, not the normal path.)
-//  - LED: heartbeat = capturing · solid = no WiFi · fast blink = no SD.
+//  - LED encodes pipeline state (no laptop / no SD needed to read it):
+//      solid = no WiFi · slow blink = no feed · fast blink = feed but no data
+//      1 pip/s = data flowing + saving to SD · 2 pips/s = data flowing, not saved
+//      (2 pips/s is the expected Visit-1 success state with no card in).
 //
 // NOT compile-verified in CI (no toolchain in the authoring env) — run
 // `pio run` and a bench soak before trusting it. See PLAN.md Phase 1/3.
@@ -75,8 +78,7 @@ unsigned long lastFlushMs   = 0;
 unsigned long lastGuardMs   = 0;
 unsigned long lastConnectMs = 0;
 unsigned long backoffMs     = TCP_BACKOFF_MIN_MS;
-unsigned long lastBlinkMs   = 0;
-bool          ledOn         = false;
+unsigned long lastRecordMs  = 0;            // when we last captured a complete sentence (LED "data flowing")
 
 // ── Time helpers ──────────────────────────────────────────────────────
 static void isoNow(char* buf, size_t n) {
@@ -238,7 +240,10 @@ static void pumpFeed() {
     if (ci < 0) break;
     char c = (char)ci;
     if (c == '\n') {
-      if (!lineOverflow && lineLen > 0) writeRecord(line, lineLen);
+      if (!lineOverflow && lineLen > 0) {
+        lastRecordMs = millis();              // a real sentence arrived — drives the LED "data flowing" state
+        writeRecord(line, lineLen);
+      }
       lineLen = 0; lineOverflow = false;
     } else if (c == '\r') {
       // ignore — handled by the \n
@@ -250,16 +255,38 @@ static void pumpFeed() {
 }
 
 // ── LED status ────────────────────────────────────────────────────────
+// Encodes how far up the pipeline we got, so the board reports its state with
+// no laptop and no SD card. Patterns (easy to tell apart at a glance):
+//
+//   SOLID ON .............. no WiFi (can't join the network)
+//   SLOW blink (1 Hz) ..... WiFi up, but the feed (MFD) won't connect
+//   FAST blink (5 Hz) ..... feed connected, but no data arriving (silent feed)
+//   single PIP / sec ...... ✅ data flowing AND saving to SD — the deploy-happy state
+//   double PIP / sec ...... data flowing but NOT saving (no card / SD error)
+//                           — this is the EXPECTED success state at Visit 1
+//                             (no SD): it means the board reached the real feed.
 static void updateLed() {
-  unsigned long now = millis();
-  if (!sdOk) {                                // fast blink — SD problem (most urgent)
-    if (now - lastBlinkMs >= 120) { ledOn = !ledOn; digitalWrite(LED_BUILTIN, ledOn); lastBlinkMs = now; }
-  } else if (!wifiUp()) {                      // solid on — no WiFi
+  const unsigned long now = millis();
+  const bool flowing = (lastRecordMs != 0) && (now - lastRecordMs < 3000);
+  const bool saving  = sdOk && !writePaused && logFile;
+
+  if (!wifiUp()) {                              // SOLID — no WiFi
     digitalWrite(LED_BUILTIN, HIGH);
-  } else {                                     // heartbeat — alive & capturing
-    unsigned long phase = now % 2000;
-    digitalWrite(LED_BUILTIN, phase < 60 ? HIGH : LOW);
+    return;
   }
+  if (!feed.connected()) {                      // SLOW 1 Hz — on network, no feed
+    digitalWrite(LED_BUILTIN, (now % 1000) < 500 ? HIGH : LOW);
+    return;
+  }
+  if (!flowing) {                               // FAST 5 Hz — feed up but silent
+    digitalWrite(LED_BUILTIN, (now % 200) < 100 ? HIGH : LOW);
+    return;
+  }
+  // Data flowing: single pip = saving, double pip = not saving (no card / error).
+  const unsigned long ph = now % 1000;          // 1 s cycle
+  const bool on = saving ? (ph < 50)
+                         : (ph < 50) || (ph >= 180 && ph < 230);
+  digitalWrite(LED_BUILTIN, on ? HIGH : LOW);
 }
 
 // ── Arduino entry points ──────────────────────────────────────────────
@@ -289,7 +316,8 @@ void setup() {
   // Mount SD (retry — the card or contacts can be slow on cold boot).
   for (int i = 0; i < 5 && !mountSD(); i++) { Serial.println("SD: mount retry"); delay(500); }
   if (sdOk) { Serial.println("SD: mounted"); openLogForToday(); }
-  else      Serial.println("SD: FAILED — fast-blink; fix card and reboot");
+  else      Serial.println("SD: not present — running without card (records not saved to disk; "
+                           "LED double-pips once the live feed is flowing)");
 
   connectWifi();
   lastGuardMs = millis();
