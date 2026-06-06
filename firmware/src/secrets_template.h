@@ -6,8 +6,10 @@
 
 #pragma once
 
-// Boat WiFi network — the MFD's broadcast SSID
-#define WIFI_SSID      "REPLACE-WITH-BOAT-SSID"
+// Boat WiFi network. Phase 0 found Lynx's instrument network is
+// "lynx-instruments" (WPA2). SSID is not secret; the passphrase is — fill it
+// in your local secrets.h only (this template is committed).
+#define WIFI_SSID      "lynx-instruments"
 #define WIFI_PASSWORD  "REPLACE-WITH-BOAT-PASSWORD"
 
 // Optional: a second network to try if the primary doesn't associate
