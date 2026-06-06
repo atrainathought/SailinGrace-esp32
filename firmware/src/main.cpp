@@ -152,7 +152,8 @@ static size_t jsonEscape(const char* src, size_t srcLen, char* out, size_t outMa
 }
 
 static void writeRecord(const char* raw, size_t rawLen) {
-  if (!sdOk || writePaused || !logFile) return;
+  const bool toSD = sdOk && !writePaused && logFile;
+  if (!toSD && !SERIAL_ECHO) return;                    // nothing to do (SERIAL_ECHO is a compile constant)
 
   // static: keep these off the 8 KB loop-task stack. Safe — writeRecord is
   // only ever called from loop() (single-threaded), never reentrantly.
@@ -167,7 +168,10 @@ static void writeRecord(const char* raw, size_t rawLen) {
                    millis(), iso, feedHost, TCP_PORT, esc);
   if (n <= 0) return;
   if (n >= (int)sizeof(rec)) n = sizeof(rec) - 1;       // truncated guard
-  logFile.write((const uint8_t*)rec, n);
+  if (toSD) logFile.write((const uint8_t*)rec, n);
+#if SERIAL_ECHO
+  Serial.write((const uint8_t*)rec, n);                 // bench: mirror to the monitor (no SD needed)
+#endif
 }
 
 // ── WiFi ──────────────────────────────────────────────────────────────

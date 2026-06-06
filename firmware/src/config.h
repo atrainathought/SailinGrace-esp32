@@ -6,9 +6,25 @@
 // ── Data source — Lynx B&G MFDs (Phase 0 discovery) ───────────────────
 // .16 carries the fullest instrument set; .15 (Zeus3S) serves the same
 // feed and is the fallback if .16 is unreachable.
+// #ifndef-guarded so a bench build can override the host via a build flag
+// (e.g. PLATFORMIO_BUILD_FLAGS='-DTCP_HOST="192.168.1.155"') without editing
+// the committed boat defaults.
+#ifndef TCP_HOST
 #define TCP_HOST           "192.168.0.16"
+#endif
+#ifndef TCP_HOST_FALLBACK
 #define TCP_HOST_FALLBACK  "192.168.0.15"
+#endif
+#ifndef TCP_PORT
 #define TCP_PORT           10110
+#endif
+
+// Echo every captured record to Serial (in addition to / instead of SD).
+// Default off for deployment; set -DSERIAL_ECHO=1 for a bench test with no
+// SD card — proves the WiFi→TCP→parse→format path on the serial monitor.
+#ifndef SERIAL_ECHO
+#define SERIAL_ECHO        0
+#endif
 
 // ── SD card (Adalogger FeatherWing, SPI) ──────────────────────────────
 // VERIFY against your board: the Adalogger FeatherWing SD chip-select is
