@@ -300,14 +300,22 @@ void setup() {
 
   Wire.begin();
   if (rtc.begin()) {
-    // initialized() is the documented PCF8523 "clock is running / has been
-    // set" check. An unset clock is treated as no clock so we never log a
-    // bogus wall-time — GPS-in-stream gives absolute time ashore regardless.
-    if (rtc.initialized()) {
-      rtcOk = true;
-      Serial.println("RTC: ok");
+    // One-time clock set: build once with -DSET_RTC_EPOCH=$(date -u +%s) to
+    // set a fresh PCF8523 to the build-moment UTC. Guarded on !initialized()
+    // so it only sets an unset clock and never overwrites a running one.
+#ifdef SET_RTC_EPOCH
+    if (!rtc.initialized()) rtc.adjust(DateTime((uint32_t)SET_RTC_EPOCH));
+#endif
+    // initialized() = "clock running / has been set". An unset clock is
+    // treated as no clock so we never log a bogus time — GPS-in-stream gives
+    // absolute time ashore regardless.
+    rtcOk = rtc.initialized();
+    if (rtcOk) {
+      DateTime n = rtc.now();
+      Serial.printf("RTC: ok — %04d-%02d-%02dT%02d:%02d:%02dZ\n",
+                    n.year(), n.month(), n.day(), n.hour(), n.minute(), n.second());
     } else {
-      Serial.println("RTC: present but unset — timestamps empty until set (run a set-time sketch)");
+      Serial.println("RTC: present but unset — build once with -DSET_RTC_EPOCH; GPS-in-stream covers time");
     }
   } else {
     Serial.println("RTC: not found — timestamps empty; reconstruct from GPS ashore");

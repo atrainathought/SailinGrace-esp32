@@ -27,10 +27,9 @@
 #endif
 
 // ── SD card (Adalogger FeatherWing, SPI) ──────────────────────────────
-// VERIFY against your board: the Adalogger FeatherWing SD chip-select is
-// pin 5 on most Feathers, but some ESP32 boards route it to 10. See
-// docs/hardware.md before first flash.
-#define SD_CS              5
+// Adalogger FeatherWing SD chip-select on the Adafruit ESP32 Feather
+// (HUZZAH32) is GPIO 33. (It's pin 5/10 on other Feathers — board-specific.)
+#define SD_CS              33
 #define LOG_DIR            "/logs"
 #define SD_MIN_FREE_MB     100      // stop writing below this floor (never fill the card)
 
