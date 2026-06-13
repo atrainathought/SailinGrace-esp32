@@ -131,7 +131,7 @@ static void openLogForToday() {
   snprintf(path, sizeof(path), "%s/log_%s.ndjson", LOG_DIR, date);
   logFile = SD.open(path, FILE_APPEND);
   if (logFile) {
-    Serial.printf("logging to %s\n", path);
+    Serial.printf("logging to %s (existing: %u bytes)\n", path, (unsigned)logFile.size());
   } else {
     Serial.printf("ERROR: cannot open %s\n", path);
     sdOk = false;                            // force a remount attempt in the guard
