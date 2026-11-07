@@ -27,9 +27,14 @@
 #endif
 
 // ── SD card (Adalogger FeatherWing, SPI) ──────────────────────────────
-// Adalogger FeatherWing SD chip-select on the Adafruit ESP32 Feather
-// (HUZZAH32) is GPIO 33. (It's pin 5/10 on other Feathers — board-specific.)
+// The Adalogger FeatherWing's SD chip-select sits on the Feather's "D10"
+// position, which maps to a different GPIO per board:
+//   Feather HUZZAH32 (original ESP32) → GPIO 33   (default below)
+//   Feather ESP32-S3                  → GPIO 10
+// Each env in platformio.ini sets -DSD_CS for its board; this is the fallback.
+#ifndef SD_CS
 #define SD_CS              33
+#endif
 #define LOG_DIR            "/logs"
 #define SD_MIN_FREE_MB     100      // stop writing below this floor (never fill the card)
 
@@ -39,6 +44,11 @@
 #define TCP_BACKOFF_MIN_MS 1000UL   // reconnect backoff floor
 #define TCP_BACKOFF_MAX_MS 30000UL  // reconnect backoff ceiling
 #define WIFI_CONNECT_TIMEOUT_MS 20000UL
+// Drop and reconnect the feed if a "connected" socket delivers no bytes for
+// this long. Catches a half-open TCP connection (MFD rebooted / lost power
+// without a FIN) that would otherwise look connected forever. The Lynx feed
+// carries ~20 sentences/s, so 30 s of silence is unambiguous.
+#define FEED_SILENCE_MS    30000UL
 
 // ── Watchdog ──────────────────────────────────────────────────────────
 // Reset the chip if loop() hangs this long (e.g. a wedged WiFi/TCP stack).
@@ -52,5 +62,5 @@
 
 // ── Status LED ────────────────────────────────────────────────────────
 #ifndef LED_BUILTIN
-#define LED_BUILTIN        13       // Adafruit ESP32-S3 Feather red LED
+#define LED_BUILTIN        13       // red LED on both the HUZZAH32 and ESP32-S3 Feathers
 #endif
