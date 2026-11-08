@@ -26,3 +26,6 @@ venv/
 # Captured logs from a real deploy — these belong in a personal data dir, not the repo
 data/captures/
 *.ndjson
+
+# N2K bench simulator
+firmware-n2ksim/.pio/

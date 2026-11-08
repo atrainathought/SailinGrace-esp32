@@ -19,6 +19,11 @@ procedure that has to happen first (we need to know whether Lynx
 broadcasts NMEA 0183 or SignalK before writing any firmware — the
 two paths fork 5× in effort).
 
+**Bench tool:** [`firmware-n2ksim/`](firmware-n2ksim/) is a separate
+firmware that turns the same ESP32 into an NMEA 2000 *sensor simulator* for
+bench-testing the Pi relay (see SailinGrace-pi `docs/bench_test.md`). Bench
+only — never on a live boat bus.
+
 ## Why this exists
 
 - **Pi 5/4 is overkill** for boats where we only want a passive log.
