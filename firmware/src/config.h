@@ -26,19 +26,34 @@
 #define SERIAL_ECHO        0
 #endif
 
-// ── SD card (Adalogger FeatherWing, SPI) ──────────────────────────────
-// Adalogger FeatherWing SD chip-select on the Adafruit ESP32 Feather
-// (HUZZAH32) is GPIO 33. (It's pin 5/10 on other Feathers — board-specific.)
-#define SD_CS              33
+// ── SD card (SPI) ─────────────────────────────────────────────────────
+// SD chip-select, per board. Default 5 = wired microSD module on the ESP32
+// DevKit (VSPI: SCK 18 / MISO 19 / MOSI 23 / CS 5). The Adalogger
+// FeatherWing's CS sits on the Feather "D10" position, a different GPIO per
+// board: HUZZAH32 → 33, ESP32-S3 Feather → 10. Each env in platformio.ini
+// sets -DSD_CS for its board; #ifndef so the build flag wins.
+#ifndef SD_CS
+#define SD_CS              5
+#endif
 #define LOG_DIR            "/logs"
 #define SD_MIN_FREE_MB     100      // stop writing below this floor (never fill the card)
 
 // ── Timing ────────────────────────────────────────────────────────────
 #define FLUSH_INTERVAL_MS  2000UL   // fsync cadence — bounds data lost on a power cut
 #define GUARD_INTERVAL_MS  60000UL  // periodic WiFi / SD / date-rollover / free-space check
+#define WIFI_GRACE_MS      30000UL  // leave auto-reconnect alone this long before the guard forces a re-join
+#define SD_QUICK_RETRY_MS  2000UL   // after an SD error: remount attempt cadence…
+#define SD_QUICK_RETRIES   5        // …and how many before falling back to the guard
 #define TCP_BACKOFF_MIN_MS 1000UL   // reconnect backoff floor
 #define TCP_BACKOFF_MAX_MS 30000UL  // reconnect backoff ceiling
 #define WIFI_CONNECT_TIMEOUT_MS 20000UL
+// Drop and reconnect the feed if a "connected" socket delivers no bytes for
+// this long. Catches a half-open TCP connection (MFD rebooted / lost power
+// without a FIN) that would otherwise look connected forever. The Lynx feed
+// carries ~20 sentences/s, so 30 s of silence is unambiguous.
+#ifndef FEED_SILENCE_MS
+#define FEED_SILENCE_MS    30000UL
+#endif
 
 // ── Watchdog ──────────────────────────────────────────────────────────
 // Reset the chip if loop() hangs this long (e.g. a wedged WiFi/TCP stack).
@@ -52,5 +67,5 @@
 
 // ── Status LED ────────────────────────────────────────────────────────
 #ifndef LED_BUILTIN
-#define LED_BUILTIN        13       // Adafruit ESP32-S3 Feather red LED
+#define LED_BUILTIN        13       // red LED on both the HUZZAH32 and ESP32-S3 Feathers
 #endif
