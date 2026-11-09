@@ -4,11 +4,20 @@
 // (Phase 0: Lynx B&G at 192.168.0.16:10110), and appends every line to an
 // NDJSON file on the SD card, one record per sentence:
 //
-//   {"ms":12345,"t":"2026-06-19T14:33:21Z","src":"tcp:192.168.0.16:10110","raw":"$GPRMC,..."}
+//   {"boot":7,"ms":12345,"t":"2026-06-19T14:33:21Z","src":"tcp:192.168.0.16:10110","raw":"$GPRMC,..."}
 //
-// "ms" = millis() since boot (monotonic, always present). "t" = UTC from the
-// RTC if fitted, else "" — absolute time is then reconstructed ashore from the
-// GPS sentences in the stream (Phase 0 confirmed GPS is present) aligned on ms.
+// "boot" = boot counter (persisted in NVS, +1 every power-up/reset). "ms" =
+// millis() since that boot (monotonic within a boot, resets on reboot), so
+// (boot, ms) orders every record even with no RTC. "t" = UTC from the RTC if
+// fitted, else "" — absolute time is then reconstructed ashore from the GPS
+// sentences in the stream (Phase 0 confirmed GPS is present).
+//
+// Each time a log file is opened, a marker record (no "raw") is written first:
+//
+//   {"boot":7,"ms":812,"t":"","event":"open","reset":"TASK_WDT"}
+//
+// "reset" is why the chip last restarted — post-trip evidence of watchdog
+// resets / brownouts / power cuts.
 //
 // Design notes:
 //  - Fixed char buffers, no String in the capture path → no heap fragmentation
@@ -23,8 +32,8 @@
 //      1 pip/s = data flowing + saving to SD · 2 pips/s = data flowing, not saved
 //      (2 pips/s is the expected Visit-1 success state with no card in).
 //
-// NOT compile-verified in CI (no toolchain in the authoring env) — run
-// `pio run` and a bench soak before trusting it. See PLAN.md Phase 1/3.
+// Not built in CI — run `pio run` and a bench soak after changes.
+// See PLAN.md Phase 1/3.
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -32,7 +41,9 @@
 #include <SD.h>
 #include <Wire.h>
 #include <RTClib.h>
+#include <Preferences.h>
 #include "esp_task_wdt.h"
+#include "esp_system.h"
 
 #include "config.h"
 #include "secrets.h"
@@ -79,6 +90,36 @@ unsigned long lastGuardMs   = 0;
 unsigned long lastConnectMs = 0;
 unsigned long backoffMs     = TCP_BACKOFF_MIN_MS;
 unsigned long lastRecordMs  = 0;            // when we last captured a complete sentence (LED "data flowing")
+unsigned long lastFeedByteMs = 0;           // last byte (or connect) on the feed socket — half-open detection
+
+uint32_t    bootCount   = 0;                // persisted boot counter (NVS)
+const char* resetReason = "UNKNOWN";        // esp_reset_reason() at boot, as a name
+
+static const char* resetReasonName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:   return "POWERON";
+    case ESP_RST_EXT:       return "EXT";
+    case ESP_RST_SW:        return "SW";
+    case ESP_RST_PANIC:     return "PANIC";
+    case ESP_RST_INT_WDT:   return "INT_WDT";
+    case ESP_RST_TASK_WDT:  return "TASK_WDT";
+    case ESP_RST_WDT:       return "WDT";
+    case ESP_RST_DEEPSLEEP: return "DEEPSLEEP";
+    case ESP_RST_BROWNOUT:  return "BROWNOUT";
+    case ESP_RST_SDIO:      return "SDIO";
+    default:                return "UNKNOWN";
+  }
+}
+
+// Bump and persist the boot counter. One NVS write per boot — negligible wear.
+static void loadBootCount() {
+  Preferences prefs;
+  if (prefs.begin("sglog", false)) {
+    bootCount = prefs.getUInt("boot", 0) + 1;
+    prefs.putUInt("boot", bootCount);
+    prefs.end();
+  }
+}
 
 // ── Time helpers ──────────────────────────────────────────────────────
 static void isoNow(char* buf, size_t n) {
@@ -102,6 +143,10 @@ static void todayStr(char* buf, size_t n) {
 
 // ── SD ────────────────────────────────────────────────────────────────
 static bool mountSD() {
+  // SD.begin() returns true immediately if a drive is still registered, so a
+  // remount after a failure must SD.end() first or it never re-inits the card.
+  // end() is a no-op when nothing is mounted.
+  SD.end();
   if (!SD.begin(SD_CS)) {
     sdOk = false;
     return false;
@@ -119,6 +164,18 @@ static bool freeSpaceOk() {
   return freeMB >= (uint64_t)SD_MIN_FREE_MB;
 }
 
+// Tear down after an SD error: close the file, unmount, and flag sdOk=false
+// so the guard does a real remount (mountSD → SD.end/SD.begin) next pass.
+static void sdFail(const char* why) {
+  Serial.printf("SD: %s — unmounting, guard will remount\n", why);
+  if (logFile) logFile.close();
+  SD.end();
+  sdOk = false;
+  currentDate[0] = '\0';                    // force a fresh open after remount
+}
+
+static void writeOpenMarker();
+
 // Open (or rotate to) the log file for the current UTC date.
 static void openLogForToday() {
   char date[11];
@@ -132,10 +189,26 @@ static void openLogForToday() {
   logFile = SD.open(path, FILE_APPEND);
   if (logFile) {
     Serial.printf("logging to %s (existing: %u bytes)\n", path, (unsigned)logFile.size());
+    writeOpenMarker();
   } else {
     Serial.printf("ERROR: cannot open %s\n", path);
-    sdOk = false;                            // force a remount attempt in the guard
+    sdFail("open failed");
   }
+}
+
+// Marker record at the head of every file open: ties this file segment to a
+// boot and records why the chip last reset. Written straight to SD (it's a
+// file-structure record, not feed data).
+static void writeOpenMarker() {
+  if (!logFile) return;
+  char iso[24];
+  isoNow(iso, sizeof(iso));
+  char rec[160];
+  int n = snprintf(rec, sizeof(rec),
+                   "{\"boot\":%lu,\"ms\":%lu,\"t\":\"%s\",\"event\":\"open\",\"reset\":\"%s\"}\n",
+                   (unsigned long)bootCount, millis(), iso, resetReason);
+  if (n <= 0 || n >= (int)sizeof(rec)) return;
+  if (logFile.write((const uint8_t*)rec, n) != (size_t)n) sdFail("marker write failed");
 }
 
 // ── Record writer ─────────────────────────────────────────────────────
@@ -166,11 +239,13 @@ static void writeRecord(const char* raw, size_t rawLen) {
   jsonEscape(raw, rawLen, esc, sizeof(esc));
 
   int n = snprintf(rec, sizeof(rec),
-                   "{\"ms\":%lu,\"t\":\"%s\",\"src\":\"tcp:%s:%d\",\"raw\":\"%s\"}\n",
-                   millis(), iso, feedHost, TCP_PORT, esc);
+                   "{\"boot\":%lu,\"ms\":%lu,\"t\":\"%s\",\"src\":\"tcp:%s:%d\",\"raw\":\"%s\"}\n",
+                   (unsigned long)bootCount, millis(), iso, feedHost, TCP_PORT, esc);
   if (n <= 0) return;
   if (n >= (int)sizeof(rec)) n = sizeof(rec) - 1;       // truncated guard
-  if (toSD) logFile.write((const uint8_t*)rec, n);
+  // A short write means the card is gone or erroring — tear down so the
+  // guard remounts, rather than carrying on "saving" into the void.
+  if (toSD && logFile.write((const uint8_t*)rec, n) != (size_t)n) sdFail("write failed");
 #if SERIAL_ECHO
   Serial.write((const uint8_t*)rec, n);                 // bench: mirror to the monitor (no SD needed)
 #endif
@@ -224,7 +299,10 @@ static void ensureFeed() {
   if (feed.connect(feedHost, TCP_PORT)) {
     Serial.println("feed: connected");
     backoffMs = TCP_BACKOFF_MIN_MS;
-    hostFails = 0;
+    // hostFails is NOT reset here — only when data actually arrives (pumpFeed).
+    // A host that accepts the socket but never sends counts as failing, so we
+    // still rotate to the other MFD.
+    lastFeedByteMs = millis();                // silence clock starts at connect
     lineLen = 0; lineOverflow = false;        // start clean on a fresh socket
   } else {
     hostFails++;
@@ -239,6 +317,8 @@ static void pumpFeed() {
     int ci = feed.read();
     if (ci < 0) break;
     char c = (char)ci;
+    lastFeedByteMs = millis();
+    hostFails = 0;                            // this host is genuinely delivering
     if (c == '\n') {
       if (!lineOverflow && lineLen > 0) {
         lastRecordMs = millis();              // a real sentence arrived — drives the LED "data flowing" state
@@ -252,6 +332,18 @@ static void pumpFeed() {
       else lineOverflow = true;               // pathological line — drop it, don't smear into the next
     }
   }
+}
+
+// Half-open detection: a socket that reports connected but has delivered
+// nothing for FEED_SILENCE_MS is dead (MFD rebooted / lost power without
+// closing). Drop it so ensureFeed() reconnects — and count it against the host
+// so repeated silence rotates to the fallback MFD.
+static void checkFeedSilence() {
+  if (!feed.connected()) return;
+  if (millis() - lastFeedByteMs < FEED_SILENCE_MS) return;
+  Serial.printf("feed: no data for %lus — dropping socket\n", FEED_SILENCE_MS / 1000UL);
+  feed.stop();
+  hostFails++;
 }
 
 // ── LED status ────────────────────────────────────────────────────────
@@ -296,6 +388,10 @@ void setup() {
   Serial.println("\nSailinGrace-esp32 logger booting");
   pinMode(LED_BUILTIN, OUTPUT);
 
+  resetReason = resetReasonName(esp_reset_reason());
+  loadBootCount();
+  Serial.printf("boot #%lu, last reset: %s\n", (unsigned long)bootCount, resetReason);
+
   wdtBegin();                                  // before the blocking SD/WiFi bring-up so they can feed it
 
   Wire.begin();
@@ -336,7 +432,7 @@ void loop() {
 
   if (wifiUp()) {
     ensureFeed();
-    if (feed.connected()) pumpFeed();
+    if (feed.connected()) { pumpFeed(); checkFeedSilence(); }
   }
 
   // Periodic flush — bounds how much is lost on a power cut.
