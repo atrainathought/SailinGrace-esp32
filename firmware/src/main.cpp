@@ -262,6 +262,8 @@ static void connectWifi() {
                                              // well before the 60 s guard backstop
 
   Serial.printf("WiFi: joining %s\n", WIFI_SSID);
+  WiFi.disconnect();                         // a guard retry may find the fallback attempt still in progress
+  delay(100);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 
   unsigned long start = millis();
@@ -273,6 +275,8 @@ static void connectWifi() {
   // Fallback SSID, if configured and the primary didn't come up.
   if (!wifiUp() && strlen(WIFI_SSID_FALLBACK) > 0) {
     Serial.printf("WiFi: primary failed, trying %s\n", WIFI_SSID_FALLBACK);
+    WiFi.disconnect();                       // stop the primary attempt, or begin() fails "sta is connecting"
+    delay(100);
     WiFi.begin(WIFI_SSID_FALLBACK, WIFI_PASSWORD_FALLBACK);
     start = millis();
     while (!wifiUp() && millis() - start < WIFI_CONNECT_TIMEOUT_MS) { wdtFeed(); delay(250); }
