@@ -13,7 +13,7 @@ Sibling repo — inherits nothing from `~/SailinGrace` (the routing app, laptop-
 | Path | What it is |
 |---|---|
 | `firmware/src/main.cpp` | The whole firmware — one translation unit, fixed char buffers, no `String` in the capture path |
-| `firmware/src/config.h` | Non-secret tunables. Every `#define` is `#ifndef`-guarded so a `-D` build flag wins |
+| `firmware/src/config.h` | Non-secret tunables. The bench-relevant ones (`TCP_HOST*`, `TCP_PORT`, `SERIAL_ECHO`, `SD_CS`, `FEED_SILENCE_MS`, `LED_BUILTIN`) are `#ifndef`-guarded so a `-D` build flag wins; the rest are plain `#define`s |
 | `firmware/src/secrets_template.h` | Copy to `secrets.h` (gitignored) before the first build |
 | `firmware-n2ksim/` | Separate PlatformIO project: NMEA 2000 bench sensor simulator for the Pi relay. Bench only, never on a live bus |
 | `tools/parse_log.py` | Post-trip replay through SailinGrace's own parser. Needs `--sailingrace PATH` and that repo's venv for `pynmea2` |

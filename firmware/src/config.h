@@ -41,6 +41,9 @@
 // ── Timing ────────────────────────────────────────────────────────────
 #define FLUSH_INTERVAL_MS  2000UL   // fsync cadence — bounds data lost on a power cut
 #define GUARD_INTERVAL_MS  60000UL  // periodic WiFi / SD / date-rollover / free-space check
+#define WIFI_GRACE_MS      30000UL  // leave auto-reconnect alone this long before the guard forces a re-join
+#define SD_QUICK_RETRY_MS  2000UL   // after an SD error: remount attempt cadence…
+#define SD_QUICK_RETRIES   5        // …and how many before falling back to the guard
 #define TCP_BACKOFF_MIN_MS 1000UL   // reconnect backoff floor
 #define TCP_BACKOFF_MAX_MS 30000UL  // reconnect backoff ceiling
 #define WIFI_CONNECT_TIMEOUT_MS 20000UL
@@ -48,7 +51,9 @@
 // this long. Catches a half-open TCP connection (MFD rebooted / lost power
 // without a FIN) that would otherwise look connected forever. The Lynx feed
 // carries ~20 sentences/s, so 30 s of silence is unambiguous.
+#ifndef FEED_SILENCE_MS
 #define FEED_SILENCE_MS    30000UL
+#endif
 
 // ── Watchdog ──────────────────────────────────────────────────────────
 // Reset the chip if loop() hangs this long (e.g. a wedged WiFi/TCP stack).
