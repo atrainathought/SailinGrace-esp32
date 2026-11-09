@@ -26,10 +26,14 @@
 #define SERIAL_ECHO        0
 #endif
 
-// ── SD card (Adalogger FeatherWing, SPI) ──────────────────────────────
-// Adalogger FeatherWing SD chip-select on the Adafruit ESP32 Feather
-// (HUZZAH32) is GPIO 33. (It's pin 5/10 on other Feathers — board-specific.)
-#define SD_CS              33
+// ── SD card (SPI) ─────────────────────────────────────────────────────
+// SD chip-select, per board. Default 5 = wired microSD module on the ESP32
+// DevKit (VSPI: SCK 18 / MISO 19 / MOSI 23 / CS 5). The Feather+Adalogger
+// build overrides to 33 via -DSD_CS in platformio.ini. #ifndef so the
+// per-board build flag wins.
+#ifndef SD_CS
+#define SD_CS              5
+#endif
 #define LOG_DIR            "/logs"
 #define SD_MIN_FREE_MB     100      // stop writing below this floor (never fill the card)
 
