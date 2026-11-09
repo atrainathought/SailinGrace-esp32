@@ -1,8 +1,8 @@
 # SailinGrace — ESP32 (boat-side WiFi data logger)
 
 Tiny, battery-powered ESP32 datalogger that joins the boat's WiFi
-instrument network and captures everything it hears (NMEA 0183 over
-UDP/TCP or SignalK over WebSocket) to an SD card. Built for the
+instrument network, reads the MFD's NMEA 0183-over-TCP feed, and appends
+it as NDJSON to a microSD card. Built for the
 Newport-Bermuda race aboard *Lynx* but boat-agnostic.
 
 Companion to [`SailinGrace`](https://github.com/atrainathought/SailinGrace)
@@ -12,12 +12,11 @@ Pi-based relay for boats with N2K backbone access). This repo is the
 *minimum-hardware* option: when all you need is a passive log of what
 the boat WiFi puts out for the duration of the race.
 
-**Status:** planning / scaffold only. No working firmware yet — see
-[`PLAN.md`](PLAN.md) for the full build plan and
-[`docs/phase0.md`](docs/phase0.md) for the boat-day signal-discovery
-procedure that has to happen first (we need to know whether Lynx
-broadcasts NMEA 0183 or SignalK before writing any firmware — the
-two paths fork 5× in effort).
+**Status:** ✅ working, hardware-verified TCP logger (`firmware/`). Phase 0
+discovery on *Lynx* (2026-05-31) locked the path to NMEA 0183 over TCP — see
+[`docs/phase0.md`](docs/phase0.md). [`PLAN.md`](PLAN.md) is the design document.
+No automated test suite yet; verification is a bench replay of the real *Lynx*
+capture ([`docs/flash.md`](docs/flash.md#bench-build-no-boat)).
 
 **Bench tool:** [`firmware-n2ksim/`](firmware-n2ksim/) is a separate
 firmware that turns the same ESP32 into an NMEA 2000 *sensor simulator* for
@@ -42,14 +41,14 @@ only — never on a live boat bus.
 - Not running SailinGrace routing (the chip can't and shouldn't —
   see [`project-pi-relay-only`](https://github.com/atrainathought/SailinGrace-pi/blob/main/docs/install_rpi.md) for the routing-on-cheap-boat-hardware anti-pattern)
 
-## Deploy (once firmware exists)
+## Deploy
 
 ```bash
-# 1. Edit firmware/src/secrets.h with the boat WiFi password
-# 2. Flash:
-cd firmware && pio run -t upload
-# 3. Insert SD, plug in battery, drop in waterproof box
+cp firmware/src/secrets_template.h firmware/src/secrets.h   # fill in the boat WiFi passphrase
+cd firmware && pio run -t upload                            # default board: ESP32 DevKit V1
 ```
 
-See [`docs/deployment.md`](docs/deployment.md) (once written) for the full
-boat-day procedure.
+- Boards and wiring: [`docs/hardware.md`](docs/hardware.md)
+- Flashing and bench mode: [`docs/flash.md`](docs/flash.md)
+- Boat-day checklist and LED codes: [`docs/deployment.md`](docs/deployment.md)
+- Log format: [`docs/logs.md`](docs/logs.md); post-trip replay: [`tools/`](tools/)

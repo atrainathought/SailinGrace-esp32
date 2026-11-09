@@ -67,5 +67,6 @@ Pinned to `espressif32@6.9.0` (Arduino-ESP32 core 2.0.17),
 compile on Arduino core 3.x. Moving to an ESP32-S3 or core 3.x means switching
 the CAN backend to a TWAI-driver one (e.g. `NMEA2000_esp32xx`).
 
-Status: **build-verified** for `featheresp32` and `esp32dev`; not yet run on
-hardware.
+Status: **build-verified** for `featheresp32` and `esp32dev`. Flashed and run
+on an ESP32 DevKit V1 (`-e esp32dev`, 2026-11-08) with no bus attached: profile
+output correct, `WARN: SendMsg failed` as expected. Not yet run on a backbone.
